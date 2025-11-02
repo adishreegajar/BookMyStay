@@ -3,6 +3,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { body, validationResult } = require('express-validator');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 // ============================================
 // INITIALIZE EXPRESS APP
@@ -104,6 +106,41 @@ const contactSchema = new mongoose.Schema(
     },
     userAgent: {
       type: String
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+const userSchema = new mongoose.Schema(
+  {
+    firstName: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    lastName: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true
+    },
+    phone: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    password: {
+      type: String,
+      required: true,
+      select: false
     }
   },
   {
@@ -333,10 +370,22 @@ bookingSchema.pre('save', function(next) {
   next();
 });
 
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+
+// Compare password method
+userSchema.methods.comparePassword = async function(password) {
+  return await bcrypt.compare(password, this.password);
+};
+
 // Models
 const Contact = mongoose.model('Contact', contactSchema);
 const Room = mongoose.model('Room', roomSchema);
 const Booking = mongoose.model('Booking', bookingSchema);
+const User = mongoose.model('User', userSchema);
 
 // ============================================
 // VALIDATION MIDDLEWARE
@@ -519,6 +568,55 @@ const validate = (req, res, next) => {
     });
   }
   next();
+};
+
+const protect = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.user = await User.findById(decoded.id);
+    next();
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: 'Invalid token'
+    });
+  }
+};
+
+const signupValidation = () => {
+  return [
+    body('firstName').trim().notEmpty().withMessage('First name is required'),
+    body('lastName').trim().notEmpty().withMessage('Last name is required'),
+    body('email').trim().isEmail().withMessage('Valid email is required'),
+    body('phone').trim().notEmpty().withMessage('Phone is required'),
+    body('password')
+      .isLength({ min: 8 })
+      .withMessage('Password must be at least 8 characters')
+      .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+      .withMessage('Password must contain uppercase, lowercase, and number'),
+    body('confirmPassword').custom((value, { req }) => {
+      if (value !== req.body.password) {
+        throw new Error('Passwords do not match');
+      }
+      return true;
+    })
+  ];
+};
+
+const loginValidation = () => {
+  return [
+    body('email').trim().isEmail().withMessage('Valid email is required'),
+    body('password').notEmpty().withMessage('Password is required')
+  ];
 };
 
 // ============================================
@@ -1238,6 +1336,144 @@ app.post('/api/admin/seed-rooms', async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+});
+
+// Signup
+app.post('/api/auth/signup', signupValidation(), validate, async (req, res) => {
+  try {
+    const { firstName, lastName, email, phone, password } = req.body;
+
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already registered'
+      });
+    }
+
+    // Create user
+    const user = await User.create({
+      firstName,
+      lastName,
+      email,
+      phone,
+      password
+    });
+
+    // Generate token
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully',
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phone: user.phone
+        },
+        token
+      }
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create account'
+    });
+  }
+});
+
+// Login
+app.post('/api/auth/login', loginValidation(), validate, async (req, res) => {
+  try {
+    const { email, password, rememberMe } = req.body;
+
+    // Find user with password
+    const user = await User.findOne({ email }).select('+password');
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+
+    // Check password
+    const isMatch = await user.comparePassword(password);
+    
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+
+    // Generate token
+    const tokenExpiry = rememberMe ? '30d' : '7d';
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: tokenExpiry }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phone: user.phone
+        },
+        token
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
+    });
+  }
+});
+
+// Get current user
+app.get('/api/auth/me', protect, async (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      data: {
+        id: req.user._id,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        email: req.user.email,
+        phone: req.user.phone
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get user'
+    });
+  }
+});
+
+// Logout (client-side token removal)
+app.post('/api/auth/logout', protect, (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Logged out successfully'
+  });
 });
 
 // ============================================

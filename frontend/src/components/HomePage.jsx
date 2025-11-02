@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   MapPinIcon, 
   CalendarIcon, 
@@ -9,14 +10,24 @@ import {
   FireIcon,
   HomeModernIcon
 } from '@heroicons/react/24/outline';
+import LoginRequiredModal from './LoginPrompt';
 
 const Homepage = () => {
+  const navigate = useNavigate();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [formData, setFormData] = useState({
     destination: '',
     checkIn: '',
     checkOut: '',
     guests: '2'
   });
+
+  // Check login status
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    setIsLoggedIn(!!token);
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -28,8 +39,33 @@ const Homepage = () => {
 
   const handleSearch = (e) => {
     e.preventDefault();
+    
+    // Check if user is logged in
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+
     console.log('Search data:', formData);
-    // Add your search logic here
+    navigate('/rooms', { state: formData });
+  };
+
+  const handleViewDetails = (room) => {
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+    
+    navigate(`/rooms/${room.id}`);
+  };
+
+  const handleBookNow = () => {
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+    
+    navigate('/book');
   };
 
   const featuredRooms = [
@@ -66,11 +102,17 @@ const Homepage = () => {
     { icon: HomeModernIcon, name: "Modern Interiors" }
   ];
 
-  // Get today's date in YYYY-MM-DD format for min date
   const today = new Date().toISOString().split('T')[0];
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Login Required Modal */}
+      <LoginRequiredModal 
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        message="Please login to search and book rooms"
+      />
+
       {/* Hero Section */}
       <section className="relative h-[600px] bg-gradient-to-r from-gray-900 to-gray-700 overflow-visible">
         <div 
@@ -242,7 +284,10 @@ const Homepage = () => {
                   <span className="ml-2 text-gray-500">({room.reviews} reviews)</span>
                 </div>
                 
-                <button className="w-full bg-gray-900 text-white py-3 rounded-md hover:bg-gray-800 transition-all duration-300 transform hover:scale-105 font-semibold">
+                <button 
+                  onClick={() => handleViewDetails(room)}
+                  className="w-full bg-gray-900 text-white py-3 rounded-md hover:bg-gray-800 transition-all duration-300 transform hover:scale-105 font-semibold"
+                >
                   View Details
                 </button>
               </div>
@@ -282,7 +327,10 @@ const Homepage = () => {
           <p className="text-xl text-gray-300 mb-8">
             Join thousands of satisfied guests who chose BookMyStay
           </p>
-          <button className="bg-white text-gray-900 px-8 py-4 rounded-md font-semibold text-lg hover:bg-gray-100 transition-all duration-300 transform hover:scale-105 hover:shadow-xl">
+          <button 
+            onClick={handleBookNow}
+            className="bg-white text-gray-900 px-8 py-4 rounded-md font-semibold text-lg hover:bg-gray-100 transition-all duration-300 transform hover:scale-105 hover:shadow-xl"
+          >
             Book Now & Save 20%
           </button>
         </div>
